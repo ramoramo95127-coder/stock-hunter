@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     telegram_chat_id: str | None = None
     live_stream_enabled: bool = False
     live_symbols: str = ""
+    radar_enabled: bool = True
+    radar_refresh_seconds: int = 300
+    radar_max_symbols: int = 50
 
     @property
     def live_symbol_list(self) -> list[str]:
