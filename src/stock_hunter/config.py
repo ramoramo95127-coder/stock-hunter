@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     universe_min_market_cap: float = 20_000_000
     universe_max_market_cap: float = 5_000_000_000
     universe_refresh_hour_utc: int = 12
+    rvol_baseline_days: int = 20
+    rvol_minimum_days: int = 5
+    rvol_trigger: float = 2.0
 
 
 @lru_cache
