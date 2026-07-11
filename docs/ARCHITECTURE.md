@@ -9,3 +9,11 @@ and Judge modules consume only provider contracts, never vendor implementations.
 
 Credentials load exclusively from environment variables as secret values and are not
 included in provider errors or logs.
+
+## Universe Engine
+
+The Universe Engine downloads official Nasdaq Trader listed-symbol files, normalizes
+exchange codes, removes ETFs and non-common securities, and performs idempotent
+PostgreSQL upserts. Vendor enrichment is optional and bounded to protect API quotas.
+Eligibility is a separate query over known price and market-cap fields; unknown values
+remain explicit rather than being estimated.
