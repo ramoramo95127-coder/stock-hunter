@@ -16,6 +16,22 @@ class HunterEngine:
                     {"rvol": rvol.rvol or 0},
                 )
             )
+        if rvol.recent_volume_ratio is not None and rvol.recent_volume_ratio >= 1.25:
+            events.append(
+                self._event(
+                    bar,
+                    EventType.RECENT_VOLUME,
+                    min(rvol.recent_volume_ratio / 3, 1),
+                    (
+                        "Current volume reached "
+                        f"{rvol.recent_volume_ratio:.2f}x the previous 20-minute average"
+                    ),
+                    {
+                        "recent_volume_ratio": rvol.recent_volume_ratio,
+                        "recent_window": rvol.recent_window,
+                    },
+                )
+            )
         if rvol.accelerating:
             events.append(
                 self._event(
@@ -26,17 +42,44 @@ class HunterEngine:
                     {"accelerating": True},
                 )
             )
-        if bar.resistance and bar.close > bar.resistance and bar.volume > 0:
-            distance = (bar.close / bar.resistance - 1) * 100
-            events.append(
-                self._event(
-                    bar,
-                    EventType.BREAKOUT,
-                    min(0.5 + distance / 10, 1),
-                    f"Price broke resistance at {bar.resistance:.2f}",
-                    {"resistance": bar.resistance, "distance_pct": distance},
+        if bar.resistance:
+            if bar.close > bar.resistance and bar.volume > 0:
+                distance = (bar.close / bar.resistance - 1) * 100
+                events.append(
+                    self._event(
+                        bar,
+                        EventType.BREAKOUT,
+                        min(0.5 + distance / 10, 1),
+                        f"Price closed above resistance at {bar.resistance:.2f}",
+                        {
+                            "resistance": bar.resistance,
+                            "distance_pct": distance,
+                            "support": bar.low,
+                            "phase": "confirmed",
+                            "retest_count": 0,
+                        },
+                    )
                 )
-            )
+            elif bar.high >= bar.resistance * 0.995:
+                wick_rejection = bar.high > bar.resistance
+                distance = (bar.resistance / bar.close - 1) * 100
+                events.append(
+                    self._event(
+                        bar,
+                        EventType.RESISTANCE_APPROACH,
+                        0.2 if wick_rejection else min(0.35, 0.35 / max(distance, 0.1)),
+                        (
+                            "Price traded above resistance but did not close above it"
+                            if wick_rejection
+                            else "Price approached resistance without closing above it"
+                        ),
+                        {
+                            "resistance": bar.resistance,
+                            "phase": "wick_rejection" if wick_rejection else "approaching",
+                            "distance_pct": distance,
+                        },
+                    )
+                )
         if bar.previous_close:
             gap = (bar.open / bar.previous_close - 1) * 100
             if gap >= 3:
