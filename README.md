@@ -55,3 +55,13 @@ See docs/ARCHITECTURE.md.
 
 - `GET /api/v1/opportunities?limit=5` returns the current ranked opportunities.
 - `GET /api/v1/opportunities/{symbol}/timeline` explains every persisted decision.
+- `GET /api/v1/opportunity-cards` adds the entry zone, +5% target, -3% stop,
+  primary catalyst, explanation, risk, and invalidation.
+
+## Signal performance
+
+- `GET /api/v1/performance` returns daily, weekly, monthly, and all-time results.
+- `GET /api/v1/performance/{day|week|month|all}` returns one period.
+- `GET /api/v1/signals` keeps every signal as an independent historical record.
+- Automatic paper signals are measured even when the user does not enter.
+- `POST /api/v1/trades/manual` records the user's actual entry separately.
