@@ -76,5 +76,5 @@ class HunterEngine:
             timestamp=bar.timestamp,
             strength=round(strength, 4),
             reason=reason,
-            data=data,
+            data={**data, "price": bar.close},
         )
