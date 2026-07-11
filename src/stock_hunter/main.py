@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 import redis.asyncio as redis
@@ -11,6 +12,7 @@ from stock_hunter.providers.http import ProviderError
 from stock_hunter.providers.models import CompanyProfile, Quote
 from stock_hunter.universe.models import UniverseRefreshResult
 from stock_hunter.universe.nasdaq import NasdaqUniverseSource
+from stock_hunter.universe.scheduler import run_daily_refresh
 from stock_hunter.universe.service import UniverseService
 
 settings = get_settings()
@@ -31,7 +33,17 @@ async def lifespan(app: FastAPI):
         app.state.provider,
         settings,
     )
+    app.state.universe_stop = asyncio.Event()
+    app.state.universe_task = asyncio.create_task(
+        run_daily_refresh(
+            app.state.universe,
+            settings.universe_refresh_hour_utc,
+            app.state.universe_stop,
+        )
+    )
     yield
+    app.state.universe_stop.set()
+    await app.state.universe_task
     await app.state.universe_source.close()
     await app.state.provider.close()
     await app.state.redis.aclose()
