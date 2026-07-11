@@ -4,8 +4,10 @@ from datetime import UTC, datetime
 
 import redis.asyncio as redis
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 
 from stock_hunter.config import get_settings
+from stock_hunter.dashboard import dashboard
 from stock_hunter.db import create_engine, create_schema, create_session_factory, database_ready
 from stock_hunter.events import EventManager
 from stock_hunter.hunters.engine import HunterEngine
@@ -15,6 +17,7 @@ from stock_hunter.judge.engine import Judge
 from stock_hunter.judge.models import Opportunity
 from stock_hunter.judge.store import OpportunityStore
 from stock_hunter.logging import configure_logging
+from stock_hunter.notifications import TelegramNotifier
 from stock_hunter.providers.factory import create_market_provider
 from stock_hunter.providers.http import ProviderError
 from stock_hunter.providers.models import CompanyProfile, MinuteBarData, Quote
@@ -37,6 +40,7 @@ async def lifespan(app: FastAPI):
     app.state.event_manager = EventManager()
     app.state.judge = Judge()
     app.state.opportunity_store = OpportunityStore(app.state.sessions)
+    app.state.telegram = TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
     app.state.redis = redis.from_url(settings.redis_url)
     app.state.provider = create_market_provider(settings)
     app.state.universe_source = NasdaqUniverseSource()
@@ -58,6 +62,7 @@ async def lifespan(app: FastAPI):
     app.state.universe_stop.set()
     await app.state.universe_task
     await app.state.universe_source.close()
+    await app.state.telegram.close()
     await app.state.provider.close()
     await app.state.redis.aclose()
     await app.state.db.dispose()
@@ -141,6 +146,7 @@ async def ingest_minute_bar(bar: MinuteBarData) -> IngestResult:
         opportunity = app.state.judge.consider(events, bar.timestamp)
         if opportunity:
             await app.state.opportunity_store.save(opportunity)
+            await app.state.telegram.notify(opportunity)
     for event in events:
         await app.state.redis.xadd(
             "stock_events",
@@ -180,6 +186,11 @@ async def opportunity_timeline(symbol: str, limit: int = 100) -> list[dict[str, 
         }
         for item in records
     ]
+
+
+@app.get("/", response_class=HTMLResponse)
+async def dashboard_page() -> HTMLResponse:
+    return dashboard()
 
 
 @app.get("/api/v1/intraday/rvol/{symbol}", response_model=RvolSnapshot)
