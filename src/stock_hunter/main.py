@@ -1,15 +1,18 @@
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 import redis.asyncio as redis
 from fastapi import FastAPI, HTTPException
 
 from stock_hunter.config import get_settings
 from stock_hunter.db import create_engine, create_schema, create_session_factory, database_ready
+from stock_hunter.intraday.models import IngestResult, RvolSnapshot
+from stock_hunter.intraday.service import IntradayService
 from stock_hunter.logging import configure_logging
 from stock_hunter.providers.factory import create_market_provider
 from stock_hunter.providers.http import ProviderError
-from stock_hunter.providers.models import CompanyProfile, Quote
+from stock_hunter.providers.models import CompanyProfile, MinuteBarData, Quote
 from stock_hunter.universe.models import UniverseRefreshResult
 from stock_hunter.universe.nasdaq import NasdaqUniverseSource
 from stock_hunter.universe.scheduler import run_daily_refresh
@@ -24,6 +27,7 @@ async def lifespan(app: FastAPI):
     app.state.db = create_engine(settings.database_url)
     await create_schema(app.state.db)
     app.state.sessions = create_session_factory(app.state.db)
+    app.state.intraday = IntradayService(app.state.sessions, settings)
     app.state.redis = redis.from_url(settings.redis_url)
     app.state.provider = create_market_provider(settings)
     app.state.universe_source = NasdaqUniverseSource()
@@ -114,3 +118,27 @@ async def list_universe(limit: int = 100, eligible_only: bool = False) -> list[d
         }
         for stock in stocks
     ]
+
+
+@app.post("/api/v1/intraday/bars", response_model=IngestResult)
+async def ingest_minute_bar(bar: MinuteBarData) -> IngestResult:
+    result = await app.state.intraday.ingest(bar)
+    if result.rvol.triggered or result.rvol.accelerating:
+        await app.state.redis.xadd(
+            "stock_events",
+            {
+                "type": "rvol_update",
+                "symbol": result.rvol.symbol,
+                "rvol": str(result.rvol.rvol or ""),
+                "accelerating": str(result.rvol.accelerating).lower(),
+                "timestamp": result.rvol.timestamp.isoformat(),
+            },
+            maxlen=10_000,
+            approximate=True,
+        )
+    return result
+
+
+@app.get("/api/v1/intraday/rvol/{symbol}", response_model=RvolSnapshot)
+async def get_rvol(symbol: str, timestamp: datetime) -> RvolSnapshot:
+    return await app.state.intraday.snapshot(symbol, timestamp.astimezone(UTC))
