@@ -17,3 +17,12 @@ exchange codes, removes ETFs and non-common securities, and performs idempotent
 PostgreSQL upserts. Vendor enrichment is optional and bounded to protect API quotas.
 Eligibility is a separate query over known price and market-cap fields; unknown values
 remain explicit rather than being estimated.
+
+## Intraday Collector
+
+Minute bars are idempotently stored by symbol and UTC minute. RVOL uses the same clock
+minute across prior sessions, avoiding the distortion of comparing the open with an
+all-day average. A minimum-session threshold prevents immature baselines from becoming
+signals. RVOL triggers and three-minute volume acceleration publish normalized events
+to Redis Streams; future Hunters consume those events without depending on storage or
+vendor code.
