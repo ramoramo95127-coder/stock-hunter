@@ -19,11 +19,18 @@ class TrackedTrade(BaseModel):
     low: float
     outcome: TradeOutcome = TradeOutcome.OPEN
     protected_stop: float | None = None
+    manual: bool = False
 
 
-def open_trade(symbol: str, entry: float) -> TrackedTrade:
+def open_trade(symbol: str, entry: float, manual: bool = False) -> TrackedTrade:
     return TrackedTrade(
-        symbol=symbol, entry=entry, target=entry * 1.05, stop=entry * 0.97, high=entry, low=entry
+        symbol=symbol,
+        entry=entry,
+        target=round(entry * 1.05, 4),
+        stop=round(entry * 0.97, 4),
+        high=entry,
+        low=entry,
+        manual=manual,
     )
 
 
@@ -62,6 +69,11 @@ class PerformanceEngine:
         updated = update_trade(trade, high, low)
         self.trades[symbol] = updated
         return updated
+
+    def enter_manual(self, symbol: str, entry: float) -> TrackedTrade:
+        trade = open_trade(symbol.upper(), entry, manual=True)
+        self.trades[trade.symbol] = trade
+        return trade
 
     def summary(self) -> dict[str, int | float]:
         closed = [trade for trade in self.trades.values() if trade.outcome == TradeOutcome.STOP]
