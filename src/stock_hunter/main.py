@@ -19,6 +19,7 @@ from stock_hunter.judge.store import OpportunityStore
 from stock_hunter.live import FinnhubLiveCollector
 from stock_hunter.logging import configure_logging
 from stock_hunter.notifications import TelegramNotifier
+from stock_hunter.performance import PerformanceEngine
 from stock_hunter.providers.factory import create_market_provider
 from stock_hunter.providers.http import ProviderError
 from stock_hunter.providers.models import CompanyProfile, MinuteBarData, Quote
@@ -43,6 +44,7 @@ async def lifespan(app: FastAPI):
     app.state.judge = Judge()
     app.state.opportunity_store = OpportunityStore(app.state.sessions)
     app.state.telegram = TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
+    app.state.performance = PerformanceEngine()
     app.state.redis = redis.from_url(settings.redis_url)
     app.state.provider = create_market_provider(settings)
     app.state.universe_source = NasdaqUniverseSource()
@@ -176,6 +178,7 @@ async def ingest_minute_bar(bar: MinuteBarData) -> IngestResult:
 
 
 async def process_bar(application: FastAPI, bar: MinuteBarData) -> IngestResult:
+    application.state.performance.update(bar.symbol.upper(), bar.high, bar.low)
     result = await application.state.intraday.ingest(bar)
     events = [
         event
@@ -187,6 +190,8 @@ async def process_bar(application: FastAPI, bar: MinuteBarData) -> IngestResult:
         if opportunity:
             await application.state.opportunity_store.save(opportunity)
             await application.state.telegram.notify(opportunity)
+            if opportunity.state.value == "prime_candidate":
+                application.state.performance.start(opportunity.symbol, bar.close)
     for event in events:
         await application.state.redis.xadd(
             "stock_events",
@@ -231,6 +236,11 @@ async def opportunity_timeline(symbol: str, limit: int = 100) -> list[dict[str, 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard_page() -> HTMLResponse:
     return dashboard()
+
+
+@app.get("/api/v1/performance")
+async def performance_summary() -> dict[str, int | float]:
+    return app.state.performance.summary()
 
 
 @app.get("/api/v1/intraday/rvol/{symbol}", response_model=RvolSnapshot)
