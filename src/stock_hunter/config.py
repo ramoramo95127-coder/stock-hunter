@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     fmp_api_key: SecretStr | None = None
     finnhub_api_key: SecretStr | None = None
     sec_user_agent: str = "StockHunter personal-app contact@example.com"
+    universe_min_price: float = 1.0
+    universe_max_price: float = 30.0
+    universe_min_market_cap: float = 20_000_000
+    universe_max_market_cap: float = 5_000_000_000
+    universe_refresh_hour_utc: int = 12
 
 
 @lru_cache
