@@ -1,0 +1,1 @@
+"""Independent, fast opportunity hunters."""
