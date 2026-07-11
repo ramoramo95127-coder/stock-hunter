@@ -11,6 +11,8 @@ from stock_hunter.events import EventManager
 from stock_hunter.hunters.engine import HunterEngine
 from stock_hunter.intraday.models import IngestResult, RvolSnapshot
 from stock_hunter.intraday.service import IntradayService
+from stock_hunter.judge.engine import Judge
+from stock_hunter.judge.models import Opportunity
 from stock_hunter.logging import configure_logging
 from stock_hunter.providers.factory import create_market_provider
 from stock_hunter.providers.http import ProviderError
@@ -32,6 +34,7 @@ async def lifespan(app: FastAPI):
     app.state.intraday = IntradayService(app.state.sessions, settings)
     app.state.hunters = HunterEngine()
     app.state.event_manager = EventManager()
+    app.state.judge = Judge()
     app.state.redis = redis.from_url(settings.redis_url)
     app.state.provider = create_market_provider(settings)
     app.state.universe_source = NasdaqUniverseSource()
@@ -132,6 +135,8 @@ async def ingest_minute_bar(bar: MinuteBarData) -> IngestResult:
         for event in app.state.hunters.evaluate(bar, result.rvol)
         if app.state.event_manager.accept(event)
     ]
+    if events:
+        app.state.judge.consider(events, bar.timestamp)
     for event in events:
         await app.state.redis.xadd(
             "stock_events",
@@ -146,6 +151,13 @@ async def ingest_minute_bar(bar: MinuteBarData) -> IngestResult:
             approximate=True,
         )
     return result
+
+
+@app.get("/api/v1/opportunities", response_model=list[Opportunity])
+async def top_opportunities(limit: int = 5) -> list[Opportunity]:
+    if limit < 1 or limit > 5:
+        raise HTTPException(422, detail="limit must be between 1 and 5")
+    return app.state.judge.top(limit)
 
 
 @app.get("/api/v1/intraday/rvol/{symbol}", response_model=RvolSnapshot)
