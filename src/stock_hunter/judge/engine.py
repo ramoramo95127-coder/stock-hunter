@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 
 from stock_hunter.hunters.models import EventType, HunterEvent
 from stock_hunter.judge.models import Opportunity, OpportunityState
+from stock_hunter.providers.models import MinuteBarData
 
 WEIGHTS = {
     EventType.RVOL: 0.28,
@@ -59,6 +60,58 @@ class Judge:
                 self._opportunities[symbol] = opportunity
                 changed.append(opportunity)
         return changed
+
+    def assess_bar(self, bar: MinuteBarData) -> Opportunity | None:
+        """Invalidate a live setup when price closes back below its breakout level."""
+        symbol = bar.symbol.upper()
+        previous = self._opportunities.get(symbol)
+        if not previous or previous.state in {
+            OpportunityState.REJECTED,
+            OpportunityState.MISSED,
+            OpportunityState.SLEEPING,
+        }:
+            return None
+        evidence = self._events.get(symbol, {})
+        breakout = evidence.get(EventType.BREAKOUT)
+        if not breakout or breakout.data.get("failed") is True:
+            return None
+        resistance_value = breakout.data.get("resistance")
+        if not isinstance(resistance_value, int | float):
+            return None
+        resistance = float(resistance_value)
+        if bar.close >= resistance:
+            return None
+        failure_pct = (bar.close / resistance - 1) * 100
+        evidence[EventType.BREAKOUT] = HunterEvent(
+            symbol=symbol,
+            event_type=EventType.BREAKOUT,
+            timestamp=bar.timestamp,
+            strength=0,
+            reason=f"Breakout failed below resistance at {resistance:.2f}",
+            data={
+                "failed": True,
+                "resistance": resistance,
+                "price": bar.close,
+                "failure_pct": failure_pct,
+            },
+        )
+        opportunity = Opportunity(
+            symbol=symbol,
+            state=OpportunityState.REJECTED,
+            score=0,
+            updated_at=bar.timestamp,
+            reasons=[f"Price closed {abs(failure_pct):.2f}% below breakout level {resistance:.2f}"],
+            what_next="Wait for a completely new setup before reconsidering the symbol",
+            invalidation="Breakout failed and the previous opportunity is cancelled",
+            events=list(evidence.values()),
+            previous_state=previous.state,
+            change_reason=(
+                f"Opportunity cancelled: close {bar.close:.2f} fell below breakout "
+                f"level {resistance:.2f}"
+            ),
+        )
+        self._opportunities[symbol] = opportunity
+        return opportunity
 
     def _judge(
         self, symbol: str, events: list[HunterEvent], now: datetime, previous: Opportunity | None

@@ -57,6 +57,32 @@ def test_test_message_is_clearly_marked_and_contains_trade_levels() -> None:
     assert "وقف الخسارة المرجعي: $9.70 (-3%)" in message
 
 
+def test_failed_breakout_message_cancels_old_opportunity_in_arabic() -> None:
+    failed = opportunity().model_copy(
+        update={
+            "state": OpportunityState.REJECTED,
+            "score": 0,
+            "previous_state": OpportunityState.PRIME_CANDIDATE,
+        },
+        deep=True,
+    )
+    failed.events.append(
+        HunterEvent(
+            symbol="ABCD",
+            event_type=EventType.BREAKOUT,
+            timestamp=datetime.now(UTC),
+            strength=0,
+            reason="failed",
+            data={"failed": True, "resistance": 10.0, "price": 9.9, "failure_pct": -1.0},
+        )
+    )
+    message = format_opportunity(failed)
+    assert "🔴 إلغاء فرصة: ABCD" in message
+    assert "فشل الاختراق" in message
+    assert "لا تعتمد على رسالة الترشيح القديمة" in message
+    assert "الهدف والوقف السابقان أُلغيا" in message
+
+
 @pytest.mark.asyncio
 async def test_send_test_posts_to_configured_chat_without_creating_a_signal() -> None:
     request_body = None

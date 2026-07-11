@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 from stock_hunter.hunters.models import EventType, HunterEvent
 from stock_hunter.judge.engine import Judge
 from stock_hunter.judge.models import OpportunityState
+from stock_hunter.providers.models import MinuteBarData
 
 NOW = datetime(2026, 7, 11, 13, 30, tzinfo=UTC)
 
@@ -86,3 +87,26 @@ def test_restored_opportunity_keeps_evidence_for_expiration() -> None:
     assert judge.restore([original]) == 1
     assert judge.top(1)[0].symbol == "ABCD"
     assert judge.expire(NOW + timedelta(minutes=16))[0].state == OpportunityState.SLEEPING
+
+
+def test_failed_breakout_rejects_opportunity_once() -> None:
+    judge = Judge()
+    breakout = event(EventType.BREAKOUT, 1)
+    breakout.data = {"resistance": 10.0, "price": 10.2}
+    judge.consider([event(EventType.RVOL, 1), breakout, event(EventType.MOMENTUM, 1)])
+    bar = MinuteBarData(
+        symbol="abcd",
+        timestamp=NOW + timedelta(minutes=1),
+        open=10.1,
+        high=10.15,
+        low=9.85,
+        close=9.9,
+        volume=100_000,
+        source="test",
+    )
+    result = judge.assess_bar(bar)
+    assert result and result.state == OpportunityState.REJECTED
+    assert result.previous_state == OpportunityState.PRIME_CANDIDATE
+    assert result.events[1].data.get("failed") is True
+    assert judge.top() == []
+    assert judge.assess_bar(bar) is None
