@@ -7,6 +7,9 @@ Sprint 3 adds the official Nasdaq Trader symbol universe, security-type cleanup,
 PostgreSQL persistence, configurable price/market-cap eligibility, optional provider
 enrichment, and universe APIs.
 
+Sprint 4 adds durable minute bars, same-minute historical RVOL baselines, baseline
+quality reporting, volume acceleration, and Redis events for future Hunters.
+
 ## Start
 
 1. Copy .env.example to .env.
@@ -36,3 +39,11 @@ See docs/ARCHITECTURE.md.
 - `GET /api/v1/universe?limit=100` lists active common stocks.
 - `GET /api/v1/universe?eligible_only=true` requires known price and market cap within
   the configured range. Missing vendor data is never invented.
+
+## Intraday and RVOL
+
+- `POST /api/v1/intraday/bars` stores or updates a normalized minute bar.
+- `GET /api/v1/intraday/rvol/{symbol}?timestamp=...` returns an RVOL snapshot.
+- RVOL compares the current minute with the same minute across prior sessions.
+- Until `RVOL_MINIMUM_DAYS` exist, `baseline_ready` is false and `rvol` remains null.
+- Triggered or accelerating observations are published to the Redis `stock_events` stream.
