@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     rvol_baseline_days: int = 20
     rvol_minimum_days: int = 5
     rvol_trigger: float = 2.0
+    telegram_bot_token: SecretStr | None = None
+    telegram_chat_id: str | None = None
 
 
 @lru_cache
