@@ -13,6 +13,7 @@ from stock_hunter.intraday.models import IngestResult, RvolSnapshot
 from stock_hunter.intraday.service import IntradayService
 from stock_hunter.judge.engine import Judge
 from stock_hunter.judge.models import Opportunity
+from stock_hunter.judge.store import OpportunityStore
 from stock_hunter.logging import configure_logging
 from stock_hunter.providers.factory import create_market_provider
 from stock_hunter.providers.http import ProviderError
@@ -35,6 +36,7 @@ async def lifespan(app: FastAPI):
     app.state.hunters = HunterEngine()
     app.state.event_manager = EventManager()
     app.state.judge = Judge()
+    app.state.opportunity_store = OpportunityStore(app.state.sessions)
     app.state.redis = redis.from_url(settings.redis_url)
     app.state.provider = create_market_provider(settings)
     app.state.universe_source = NasdaqUniverseSource()
@@ -136,7 +138,9 @@ async def ingest_minute_bar(bar: MinuteBarData) -> IngestResult:
         if app.state.event_manager.accept(event)
     ]
     if events:
-        app.state.judge.consider(events, bar.timestamp)
+        opportunity = app.state.judge.consider(events, bar.timestamp)
+        if opportunity:
+            await app.state.opportunity_store.save(opportunity)
     for event in events:
         await app.state.redis.xadd(
             "stock_events",
@@ -158,6 +162,24 @@ async def top_opportunities(limit: int = 5) -> list[Opportunity]:
     if limit < 1 or limit > 5:
         raise HTTPException(422, detail="limit must be between 1 and 5")
     return app.state.judge.top(limit)
+
+
+@app.get("/api/v1/opportunities/{symbol}/timeline")
+async def opportunity_timeline(symbol: str, limit: int = 100) -> list[dict[str, object]]:
+    if limit < 1 or limit > 500:
+        raise HTTPException(422, detail="limit must be between 1 and 500")
+    records = await app.state.opportunity_store.timeline(symbol, limit)
+    return [
+        {
+            "state": item.state,
+            "previous_state": item.previous_state,
+            "score": item.score,
+            "reason": item.reason,
+            "evidence": item.evidence,
+            "created_at": item.created_at,
+        }
+        for item in records
+    ]
 
 
 @app.get("/api/v1/intraday/rvol/{symbol}", response_model=RvolSnapshot)
