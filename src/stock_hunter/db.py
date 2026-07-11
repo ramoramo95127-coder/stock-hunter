@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, Float, String
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, Index, String, UniqueConstraint
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -25,6 +25,24 @@ class Stock(Base):
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
     )
+
+
+class MinuteBar(Base):
+    __tablename__ = "minute_bars"
+    __table_args__ = (
+        UniqueConstraint("symbol", "timestamp", name="uq_minute_bar_symbol_timestamp"),
+        Index("ix_minute_bar_symbol_timestamp", "symbol", "timestamp"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    open: Mapped[float] = mapped_column(Float)
+    high: Mapped[float] = mapped_column(Float)
+    low: Mapped[float] = mapped_column(Float)
+    close: Mapped[float] = mapped_column(Float)
+    volume: Mapped[int] = mapped_column(BigInteger)
+    source: Mapped[str] = mapped_column(String(32))
 
 
 def create_engine(database_url: str) -> AsyncEngine:
