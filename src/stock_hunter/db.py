@@ -68,6 +68,19 @@ class DecisionRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
+class TradeRecord(Base):
+    __tablename__ = "tracked_trades"
+    symbol: Mapped[str] = mapped_column(String(16), primary_key=True)
+    entry: Mapped[float] = mapped_column(Float)
+    target: Mapped[float] = mapped_column(Float)
+    stop: Mapped[float] = mapped_column(Float)
+    high: Mapped[float] = mapped_column(Float)
+    low: Mapped[float] = mapped_column(Float)
+    outcome: Mapped[str] = mapped_column(String(24), index=True)
+    protected_stop: Mapped[float | None] = mapped_column(Float, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 def create_engine(database_url: str) -> AsyncEngine:
     return create_async_engine(database_url, pool_pre_ping=True)
 
