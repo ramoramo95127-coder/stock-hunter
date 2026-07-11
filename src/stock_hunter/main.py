@@ -16,6 +16,7 @@ from stock_hunter.intraday.service import IntradayService
 from stock_hunter.judge.engine import Judge
 from stock_hunter.judge.models import Opportunity
 from stock_hunter.judge.store import OpportunityStore
+from stock_hunter.live import FinnhubLiveCollector
 from stock_hunter.logging import configure_logging
 from stock_hunter.notifications import TelegramNotifier
 from stock_hunter.providers.factory import create_market_provider
@@ -58,7 +59,19 @@ async def lifespan(app: FastAPI):
             app.state.universe_stop,
         )
     )
+    app.state.live_stop = asyncio.Event()
+    app.state.live_task = None
+    if settings.live_stream_enabled and settings.finnhub_api_key and settings.live_symbol_list:
+        collector = FinnhubLiveCollector(
+            settings.finnhub_api_key,
+            settings.live_symbol_list,
+            lambda bar: process_bar(app, bar),
+        )
+        app.state.live_task = asyncio.create_task(collector.run(app.state.live_stop))
     yield
+    app.state.live_stop.set()
+    if app.state.live_task:
+        await app.state.live_task
     app.state.universe_stop.set()
     await app.state.universe_task
     await app.state.universe_source.close()
@@ -136,19 +149,23 @@ async def list_universe(limit: int = 100, eligible_only: bool = False) -> list[d
 
 @app.post("/api/v1/intraday/bars", response_model=IngestResult)
 async def ingest_minute_bar(bar: MinuteBarData) -> IngestResult:
-    result = await app.state.intraday.ingest(bar)
+    return await process_bar(app, bar)
+
+
+async def process_bar(application: FastAPI, bar: MinuteBarData) -> IngestResult:
+    result = await application.state.intraday.ingest(bar)
     events = [
         event
-        for event in app.state.hunters.evaluate(bar, result.rvol)
-        if app.state.event_manager.accept(event)
+        for event in application.state.hunters.evaluate(bar, result.rvol)
+        if application.state.event_manager.accept(event)
     ]
     if events:
-        opportunity = app.state.judge.consider(events, bar.timestamp)
+        opportunity = application.state.judge.consider(events, bar.timestamp)
         if opportunity:
-            await app.state.opportunity_store.save(opportunity)
-            await app.state.telegram.notify(opportunity)
+            await application.state.opportunity_store.save(opportunity)
+            await application.state.telegram.notify(opportunity)
     for event in events:
-        await app.state.redis.xadd(
+        await application.state.redis.xadd(
             "stock_events",
             {
                 "type": event.event_type.value,
