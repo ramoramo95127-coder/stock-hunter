@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, Index, String, UniqueConstraint
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, Index, String, UniqueConstraint
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -43,6 +43,29 @@ class MinuteBar(Base):
     close: Mapped[float] = mapped_column(Float)
     volume: Mapped[int] = mapped_column(BigInteger)
     source: Mapped[str] = mapped_column(String(32))
+
+
+class OpportunityRecord(Base):
+    __tablename__ = "opportunities"
+    symbol: Mapped[str] = mapped_column(String(16), primary_key=True)
+    state: Mapped[str] = mapped_column(String(32), index=True)
+    score: Mapped[float] = mapped_column(Float, index=True)
+    reasons: Mapped[list] = mapped_column(JSON)
+    what_next: Mapped[str] = mapped_column(String(500))
+    invalidation: Mapped[str] = mapped_column(String(500))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class DecisionRecord(Base):
+    __tablename__ = "decision_timeline"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    state: Mapped[str] = mapped_column(String(32), index=True)
+    previous_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    score: Mapped[float] = mapped_column(Float)
+    reason: Mapped[str] = mapped_column(String(500))
+    evidence: Mapped[list] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 def create_engine(database_url: str) -> AsyncEngine:
