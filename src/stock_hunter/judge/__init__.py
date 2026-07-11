@@ -1,0 +1,1 @@
+"""Simple, explainable opportunity ranking."""
