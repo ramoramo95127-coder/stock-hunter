@@ -44,3 +44,5 @@ class MinuteBarData(BaseModel):
     close: float = Field(gt=0)
     volume: int = Field(ge=0)
     source: str
+    previous_close: float | None = Field(default=None, gt=0)
+    resistance: float | None = Field(default=None, gt=0)
