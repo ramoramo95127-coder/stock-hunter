@@ -41,3 +41,35 @@ def update_trade(trade: TrackedTrade, high: float, low: float) -> TrackedTrade:
         candidate = updated.high * 0.97
         updated.protected_stop = max(updated.protected_stop or updated.stop, candidate)
     return updated
+
+
+class PerformanceEngine:
+    def __init__(self) -> None:
+        self.trades: dict[str, TrackedTrade] = {}
+
+    def start(self, symbol: str, entry: float) -> TrackedTrade:
+        trade = self.trades.get(symbol)
+        if trade and trade.outcome in {TradeOutcome.OPEN, TradeOutcome.RUNNER}:
+            return trade
+        trade = open_trade(symbol, entry)
+        self.trades[symbol] = trade
+        return trade
+
+    def update(self, symbol: str, high: float, low: float) -> TrackedTrade | None:
+        trade = self.trades.get(symbol)
+        if not trade:
+            return None
+        updated = update_trade(trade, high, low)
+        self.trades[symbol] = updated
+        return updated
+
+    def summary(self) -> dict[str, int | float]:
+        closed = [trade for trade in self.trades.values() if trade.outcome == TradeOutcome.STOP]
+        runners = [trade for trade in self.trades.values() if trade.outcome == TradeOutcome.RUNNER]
+        total = len(self.trades)
+        return {
+            "total": total,
+            "stops": len(closed),
+            "runners": len(runners),
+            "target_rate": round(len(runners) / total * 100, 2) if total else 0.0,
+        }
