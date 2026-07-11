@@ -28,7 +28,8 @@ class IntradayService:
         return IngestResult(stored=stored, rvol=snapshot)
 
     async def _store(self, bar: MinuteBarData) -> bool:
-        statement = insert(MinuteBar).values(**bar.model_dump())
+        stored_values = bar.model_dump(exclude={"previous_close", "resistance"})
+        statement = insert(MinuteBar).values(**stored_values)
         statement = statement.on_conflict_do_update(
             constraint="uq_minute_bar_symbol_timestamp",
             set_={
