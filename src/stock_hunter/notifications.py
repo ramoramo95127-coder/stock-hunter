@@ -38,6 +38,15 @@ def _evidence_text(event: HunterEvent) -> str:
         )
     if event.event_type == EventType.BREAKOUT:
         resistance = _number(event, "resistance")
+        price = _number(event, "price")
+        if event.data.get("failed") is True and resistance is not None:
+            distance = abs(_number(event, "failure_pct") or 0)
+            return (
+                f"فشل الاختراق: أغلق السعر عند ${price:.2f}، أي أقل من مستوى المقاومة "
+                f"${resistance:.2f} بنسبة {distance:.2f}%."
+                if price is not None
+                else f"فشل الاختراق وعاد السعر أسفل مستوى المقاومة ${resistance:.2f}."
+            )
         return (
             f"السعر تجاوز مستوى مقاومة عند ${resistance:.2f}؛ وهذا قد يفتح المجال لاستمرار "
             "الحركة إذا ثبت السعر فوقه."
@@ -70,6 +79,13 @@ def _score_text(score: float) -> str:
 
 
 def _confirmation_text(opportunity: Opportunity) -> str:
+    if opportunity.state == OpportunityState.REJECTED:
+        return (
+            "لا ننتظر تأكيدًا للفرصة القديمة لأنها أُلغيت. لا تعُد لمراقبة السهم إلا إذا "
+            "أنشأ النظام فرصة جديدة مستقلة بأدلة جديدة."
+        )
+    if opportunity.state == OpportunityState.SLEEPING:
+        return "انتهت صلاحية الأدلة القديمة. ننتظر نشاطًا جديدًا قبل إعادة السهم للمراقبة."
     types = {event.event_type for event in opportunity.events}
     missing = []
     if EventType.BREAKOUT not in types:
@@ -96,27 +112,56 @@ def format_opportunity(opportunity: Opportunity) -> str:
         (_number(event, "price") for event in ordered if _number(event, "price") is not None),
         None,
     )
+    failure = next(
+        (event for event in ordered if event.data.get("failed") is True),
+        None,
+    )
     levels = "لا تتوفر مستويات سعرية موثوقة حتى الآن."
-    if price:
+    if failure:
+        failure_price = _number(failure, "price")
+        resistance = _number(failure, "resistance")
+        levels = (
+            f"السعر عند اكتشاف الفشل: ${failure_price:.2f}\n"
+            f"مستوى الاختراق الذي لم يصمد: ${resistance:.2f}\n"
+            "الهدف والوقف السابقان أُلغيا مع إلغاء الفرصة."
+            if failure_price is not None and resistance is not None
+            else "أُلغيت المستويات المرجعية السابقة مع إلغاء الفرصة."
+        )
+    elif price:
         levels = (
             f"السعر وقت الإشارة: ${price:.2f}\n"
             f"منطقة المتابعة المرجعية: ${price * 0.995:.2f}–${price * 1.005:.2f}\n"
             f"الهدف المرجعي: ${price * 1.05:.2f} (+5%)\n"
             f"وقف الخسارة المرجعي: ${price * 0.97:.2f} (-3%)"
         )
+    icon = "🔴" if opportunity.state == OpportunityState.REJECTED else "🚨"
+    title = "إلغاء فرصة" if opportunity.state == OpportunityState.REJECTED else "تحديث فرصة"
+    score_line = (
+        "درجة القوة السابقة أُلغيت بعد فشل شرط الاستمرار."
+        if opportunity.state == OpportunityState.REJECTED
+        else f"درجة القوة: {opportunity.score:.2f} من 100\n"
+        f"تفسير الدرجة: {_score_text(opportunity.score)}"
+    )
+    update_line = (
+        "لن يعيد النظام تفعيل الفرصة القديمة؛ وأي عودة لاحقة تحتاج إشارة جديدة مستقلة."
+        if opportunity.state == OpportunityState.REJECTED
+        else "سيرسل النظام تحديثًا عند انتقال الفرصة إلى حالة أقوى أو عند بدء ضعفها."
+    )
     return (
-        f"🚨 تحديث فرصة: {opportunity.symbol}\n\n"
+        f"{icon} {title}: {opportunity.symbol}\n\n"
         f"الحالة: {STATE_AR[opportunity.state]}\n"
-        f"درجة القوة: {opportunity.score:.2f} من 100\n"
-        f"تفسير الدرجة: {_score_text(opportunity.score)}\n\n"
+        f"{score_line}\n\n"
         f"لماذا اقترحها النظام؟\n{evidence}\n\n"
         f"المستويات المرجعية:\n{levels}\n\n"
         f"ما التأكيد القادم؟\n{_confirmation_text(opportunity)}\n"
-        "سيرسل النظام تحديثًا عند انتقال الفرصة إلى حالة أقوى أو عند بدء ضعفها.\n\n"
-        "متى تُلغى الفكرة؟\n"
-        "إذا فشل الاختراق، أو تراجع حجم التداول والزخم معًا، أو خرج السعر من منطقة "
-        "المتابعة دون تأكيد.\n\n"
-        "⚠️ هذه مراقبة آلية وليست أمر شراء أو ضمان ربح. لا تطارد السعر إذا ابتعد عن المنطقة."
+        f"{update_line}\n\n"
+        "حالة الفكرة الآن:\n"
+        + (
+            "أُلغيت الفرصة السابقة. لا تعتمد على رسالة الترشيح القديمة ولا تدخل بناءً عليها.\n\n"
+            if opportunity.state == OpportunityState.REJECTED
+            else "تُلغى إذا فشل الاختراق أو تراجع حجم التداول والزخم معًا.\n\n"
+        )
+        + "⚠️ هذه مراقبة آلية وليست أمر شراء أو ضمان ربح. لا تطارد السعر إذا ابتعد عن المنطقة."
     )
 
 
@@ -180,6 +225,8 @@ class TelegramNotifier:
             OpportunityState.PRIME_CANDIDATE,
             OpportunityState.WEAKENING,
             OpportunityState.MISSED,
+            OpportunityState.REJECTED,
+            OpportunityState.SLEEPING,
         }
         changed = opportunity.previous_state != opportunity.state
         if not self.enabled or not important or not changed:
