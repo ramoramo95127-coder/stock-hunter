@@ -10,6 +10,9 @@ enrichment, and universe APIs.
 Sprint 4 adds durable minute bars, same-minute historical RVOL baselines, baseline
 quality reporting, volume acceleration, and Redis events for future Hunters.
 
+Sprint 6–7 add explainable opportunity states, top-5 ranking, durable current
+opportunities, and an append-only decision timeline in PostgreSQL.
+
 ## Start
 
 1. Copy .env.example to .env.
@@ -47,3 +50,8 @@ See docs/ARCHITECTURE.md.
 - RVOL compares the current minute with the same minute across prior sessions.
 - Until `RVOL_MINIMUM_DAYS` exist, `baseline_ready` is false and `rvol` remains null.
 - Triggered or accelerating observations are published to the Redis `stock_events` stream.
+
+## Opportunities
+
+- `GET /api/v1/opportunities?limit=5` returns the current ranked opportunities.
+- `GET /api/v1/opportunities/{symbol}/timeline` explains every persisted decision.
