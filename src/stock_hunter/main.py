@@ -53,11 +53,14 @@ async def lifespan(app: FastAPI):
     app.state.event_manager = EventManager()
     app.state.judge = Judge()
     app.state.opportunity_store = OpportunityStore(app.state.sessions)
+    app.state.telegram = TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
     restored_opportunities = await app.state.opportunity_store.restore()
     app.state.judge.restore(restored_opportunities)
     for expired in app.state.judge.expire(datetime.now(UTC)):
         await app.state.opportunity_store.save(expired)
-    app.state.telegram = TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
+        await app.state.telegram.notify(expired)
+    app.state.opportunity_stop = asyncio.Event()
+    app.state.opportunity_task = asyncio.create_task(run_opportunity_lifecycle(app))
     app.state.performance = PerformanceEngine()
     app.state.performance_store = PerformanceStore(app.state.sessions)
     app.state.signal_history = SignalHistoryStore(app.state.sessions)
@@ -114,6 +117,8 @@ async def lifespan(app: FastAPI):
         await app.state.radar_task
     if app.state.radar:
         await app.state.radar.close()
+    app.state.opportunity_stop.set()
+    await app.state.opportunity_task
     app.state.universe_stop.set()
     await app.state.universe_task
     await app.state.universe_source.close()
@@ -205,15 +210,17 @@ async def process_bar(application: FastAPI, bar: MinuteBarData) -> IngestResult:
         for event in application.state.hunters.evaluate(bar, result.rvol)
         if application.state.event_manager.accept(event)
     ]
-    if events:
-        opportunity = application.state.judge.consider(events, bar.timestamp)
-        if opportunity:
-            await application.state.opportunity_store.save(opportunity)
-            await application.state.telegram.notify(opportunity)
-            if opportunity.state.value == "prime_candidate":
-                trade = application.state.performance.start(opportunity.symbol, bar.close)
-                await application.state.performance_store.save(trade)
-                await application.state.signal_history.start(trade, opportunity, bar.timestamp)
+    opportunity = application.state.judge.consider(events, bar.timestamp) if events else None
+    invalidated = application.state.judge.assess_bar(bar)
+    if invalidated:
+        opportunity = invalidated
+    if opportunity:
+        await application.state.opportunity_store.save(opportunity)
+        await application.state.telegram.notify(opportunity)
+        if opportunity.state.value == "prime_candidate":
+            trade = application.state.performance.start(opportunity.symbol, bar.close)
+            await application.state.performance_store.save(trade)
+            await application.state.signal_history.start(trade, opportunity, bar.timestamp)
     for event in events:
         await application.state.redis.xadd(
             "stock_events",
@@ -253,6 +260,17 @@ async def opportunity_cards(limit: int = 5) -> list[OpportunityCard]:
 async def expire_opportunities(application: FastAPI) -> None:
     for opportunity in application.state.judge.expire(datetime.now(UTC)):
         await application.state.opportunity_store.save(opportunity)
+        await application.state.telegram.notify(opportunity)
+
+
+async def run_opportunity_lifecycle(application: FastAPI, interval_seconds: int = 60) -> None:
+    while not application.state.opportunity_stop.is_set():
+        try:
+            await asyncio.wait_for(
+                application.state.opportunity_stop.wait(), timeout=interval_seconds
+            )
+        except TimeoutError:
+            await expire_opportunities(application)
 
 
 @app.get("/api/v1/opportunities/{symbol}/timeline")
