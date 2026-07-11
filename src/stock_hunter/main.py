@@ -7,6 +7,8 @@ from fastapi import FastAPI, HTTPException
 
 from stock_hunter.config import get_settings
 from stock_hunter.db import create_engine, create_schema, create_session_factory, database_ready
+from stock_hunter.events import EventManager
+from stock_hunter.hunters.engine import HunterEngine
 from stock_hunter.intraday.models import IngestResult, RvolSnapshot
 from stock_hunter.intraday.service import IntradayService
 from stock_hunter.logging import configure_logging
@@ -28,6 +30,8 @@ async def lifespan(app: FastAPI):
     await create_schema(app.state.db)
     app.state.sessions = create_session_factory(app.state.db)
     app.state.intraday = IntradayService(app.state.sessions, settings)
+    app.state.hunters = HunterEngine()
+    app.state.event_manager = EventManager()
     app.state.redis = redis.from_url(settings.redis_url)
     app.state.provider = create_market_provider(settings)
     app.state.universe_source = NasdaqUniverseSource()
@@ -123,15 +127,20 @@ async def list_universe(limit: int = 100, eligible_only: bool = False) -> list[d
 @app.post("/api/v1/intraday/bars", response_model=IngestResult)
 async def ingest_minute_bar(bar: MinuteBarData) -> IngestResult:
     result = await app.state.intraday.ingest(bar)
-    if result.rvol.triggered or result.rvol.accelerating:
+    events = [
+        event
+        for event in app.state.hunters.evaluate(bar, result.rvol)
+        if app.state.event_manager.accept(event)
+    ]
+    for event in events:
         await app.state.redis.xadd(
             "stock_events",
             {
-                "type": "rvol_update",
-                "symbol": result.rvol.symbol,
-                "rvol": str(result.rvol.rvol or ""),
-                "accelerating": str(result.rvol.accelerating).lower(),
-                "timestamp": result.rvol.timestamp.isoformat(),
+                "type": event.event_type.value,
+                "symbol": event.symbol,
+                "strength": str(event.strength),
+                "reason": event.reason,
+                "timestamp": event.timestamp.isoformat(),
             },
             maxlen=10_000,
             approximate=True,
