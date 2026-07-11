@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import redis.asyncio as redis
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
 
 from stock_hunter.config import get_settings
 from stock_hunter.dashboard import dashboard
@@ -32,6 +33,11 @@ from stock_hunter.universe.service import UniverseService
 
 settings = get_settings()
 configure_logging(settings.log_level)
+
+
+class ManualEntry(BaseModel):
+    symbol: str
+    entry: float = Field(gt=0)
 
 
 @asynccontextmanager
@@ -247,6 +253,18 @@ async def dashboard_page() -> HTMLResponse:
 @app.get("/api/v1/performance")
 async def performance_summary() -> dict[str, int | float]:
     return app.state.performance.summary()
+
+
+@app.get("/api/v1/trades")
+async def trades() -> list[dict[str, object]]:
+    return [trade.model_dump(mode="json") for trade in app.state.performance.trades.values()]
+
+
+@app.post("/api/v1/trades/manual")
+async def manual_entry(request: ManualEntry) -> dict[str, object]:
+    trade = app.state.performance.enter_manual(request.symbol, request.entry)
+    await app.state.performance_store.save(trade)
+    return trade.model_dump(mode="json")
 
 
 @app.get("/api/v1/intraday/rvol/{symbol}", response_model=RvolSnapshot)
