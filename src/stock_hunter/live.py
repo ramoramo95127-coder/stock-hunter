@@ -59,6 +59,13 @@ class FinnhubLiveCollector:
         self.symbols = symbols
         self.on_bar = on_bar
         self.aggregator = MinuteAggregator()
+        self._revision = 0
+
+    def set_symbols(self, symbols: list[str]) -> None:
+        normalized = list(dict.fromkeys(symbol.upper() for symbol in symbols if symbol))
+        if normalized != self.symbols:
+            self.symbols = normalized
+            self._revision += 1
 
     async def run(self, stop: asyncio.Event) -> None:
         delay = 1
@@ -78,10 +85,16 @@ class FinnhubLiveCollector:
     async def _connect(self, stop: asyncio.Event) -> None:
         url = f"wss://ws.finnhub.io?token={self.token.get_secret_value()}"
         async with websockets.connect(url, ping_interval=20, ping_timeout=20) as socket:
+            revision = self._revision
             for symbol in self.symbols:
                 await socket.send(json.dumps({"type": "subscribe", "symbol": symbol}))
             while not stop.is_set():
-                raw = await asyncio.wait_for(socket.recv(), timeout=30)
+                if revision != self._revision:
+                    return
+                try:
+                    raw = await asyncio.wait_for(socket.recv(), timeout=5)
+                except TimeoutError:
+                    continue
                 message = json.loads(raw)
                 for trade in message.get("data", []):
                     completed = self.aggregator.add_trade(
