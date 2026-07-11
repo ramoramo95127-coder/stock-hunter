@@ -24,3 +24,10 @@ def test_performance_engine_does_not_duplicate_open_trade() -> None:
     first = engine.start("ABCD", 10)
     second = engine.start("ABCD", 11)
     assert first.entry == second.entry == 10
+
+
+def test_manual_entry_uses_actual_price() -> None:
+    trade = PerformanceEngine().enter_manual("abcd", 12)
+    assert trade.symbol == "ABCD"
+    assert trade.manual
+    assert trade.target == 12.6
