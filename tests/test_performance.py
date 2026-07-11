@@ -1,4 +1,4 @@
-from stock_hunter.performance import TradeOutcome, open_trade, update_trade
+from stock_hunter.performance import PerformanceEngine, TradeOutcome, open_trade, update_trade
 
 
 def test_target_before_stop_enters_runner_and_protects_profit() -> None:
@@ -17,3 +17,10 @@ def test_runner_stop_never_moves_backwards() -> None:
     raised = update_trade(trade, high=11, low=10.4)
     lower_high = update_trade(raised, high=10.8, low=10.5)
     assert lower_high.protected_stop == raised.protected_stop
+
+
+def test_performance_engine_does_not_duplicate_open_trade() -> None:
+    engine = PerformanceEngine()
+    first = engine.start("ABCD", 10)
+    second = engine.start("ABCD", 11)
+    assert first.entry == second.entry == 10
