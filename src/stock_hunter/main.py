@@ -20,6 +20,7 @@ from stock_hunter.live import FinnhubLiveCollector
 from stock_hunter.logging import configure_logging
 from stock_hunter.notifications import TelegramNotifier
 from stock_hunter.performance import PerformanceEngine
+from stock_hunter.performance_store import PerformanceStore
 from stock_hunter.providers.factory import create_market_provider
 from stock_hunter.providers.http import ProviderError
 from stock_hunter.providers.models import CompanyProfile, MinuteBarData, Quote
@@ -45,6 +46,8 @@ async def lifespan(app: FastAPI):
     app.state.opportunity_store = OpportunityStore(app.state.sessions)
     app.state.telegram = TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
     app.state.performance = PerformanceEngine()
+    app.state.performance_store = PerformanceStore(app.state.sessions)
+    await app.state.performance_store.restore(app.state.performance)
     app.state.redis = redis.from_url(settings.redis_url)
     app.state.provider = create_market_provider(settings)
     app.state.universe_source = NasdaqUniverseSource()
@@ -178,7 +181,9 @@ async def ingest_minute_bar(bar: MinuteBarData) -> IngestResult:
 
 
 async def process_bar(application: FastAPI, bar: MinuteBarData) -> IngestResult:
-    application.state.performance.update(bar.symbol.upper(), bar.high, bar.low)
+    updated_trade = application.state.performance.update(bar.symbol.upper(), bar.high, bar.low)
+    if updated_trade:
+        await application.state.performance_store.save(updated_trade)
     result = await application.state.intraday.ingest(bar)
     events = [
         event
@@ -191,7 +196,8 @@ async def process_bar(application: FastAPI, bar: MinuteBarData) -> IngestResult:
             await application.state.opportunity_store.save(opportunity)
             await application.state.telegram.notify(opportunity)
             if opportunity.state.value == "prime_candidate":
-                application.state.performance.start(opportunity.symbol, bar.close)
+                trade = application.state.performance.start(opportunity.symbol, bar.close)
+                await application.state.performance_store.save(trade)
     for event in events:
         await application.state.redis.xadd(
             "stock_events",
