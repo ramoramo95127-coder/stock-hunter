@@ -82,6 +82,32 @@ class TradeRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
+class SignalRecord(Base):
+    """Immutable opportunity identity with a lifecycle independent of the ticker."""
+
+    __tablename__ = "signal_history"
+    __table_args__ = (
+        Index("ix_signal_history_symbol_opened", "symbol", "opened_at"),
+        Index("ix_signal_history_outcome_opened", "outcome", "opened_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)
+    state: Mapped[str] = mapped_column(String(32))
+    entry: Mapped[float] = mapped_column(Float)
+    target: Mapped[float] = mapped_column(Float)
+    stop: Mapped[float] = mapped_column(Float)
+    high: Mapped[float] = mapped_column(Float)
+    low: Mapped[float] = mapped_column(Float)
+    outcome: Mapped[str] = mapped_column(String(24), index=True)
+    catalyst: Mapped[str] = mapped_column(String(64))
+    reasons: Mapped[list] = mapped_column(JSON)
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 def create_engine(database_url: str) -> AsyncEngine:
     return create_async_engine(database_url, pool_pre_ping=True)
 
@@ -93,6 +119,12 @@ def create_session_factory(engine: AsyncEngine) -> async_sessionmaker:
 async def create_schema(engine: AsyncEngine) -> None:
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+        # Compatibility for installations created before manual entries were added.
+        if connection.dialect.name == "postgresql":
+            await connection.exec_driver_sql(
+                "ALTER TABLE tracked_trades "
+                "ADD COLUMN IF NOT EXISTS manual BOOLEAN NOT NULL DEFAULT FALSE"
+            )
 
 
 async def database_ready(engine: AsyncEngine) -> bool:
