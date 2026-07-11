@@ -40,5 +40,6 @@ class PerformanceStore:
                 low=row.low,
                 outcome=TradeOutcome(row.outcome),
                 protected_stop=row.protected_stop,
+                manual=row.manual,
             )
         return len(rows)
