@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     rvol_trigger: float = 2.0
     telegram_bot_token: SecretStr | None = None
     telegram_chat_id: str | None = None
+    live_stream_enabled: bool = False
+    live_symbols: str = ""
+
+    @property
+    def live_symbol_list(self) -> list[str]:
+        return [symbol.strip().upper() for symbol in self.live_symbols.split(",") if symbol.strip()]
 
 
 @lru_cache
