@@ -1,33 +1,166 @@
+from datetime import UTC, datetime
+
 import httpx
 from pydantic import SecretStr
 
+from stock_hunter.hunters.models import EventType, HunterEvent
 from stock_hunter.judge.models import Opportunity, OpportunityState
+
+STATE_AR = {
+    OpportunityState.WATCHING: "تحت المراقبة",
+    OpportunityState.HIGH_ATTENTION: "اهتمام مرتفع",
+    OpportunityState.PRIME_CANDIDATE: "مرشح قوي",
+    OpportunityState.WEAKENING: "بدأت تضعف",
+    OpportunityState.SLEEPING: "لا توجد أدلة نشطة",
+    OpportunityState.MISSED: "فات وقت الدخول المناسب",
+    OpportunityState.REJECTED: "مرفوضة",
+}
+
+
+def _number(event: HunterEvent, key: str) -> float | None:
+    value = event.data.get(key)
+    return float(value) if isinstance(value, int | float) else None
+
+
+def _evidence_text(event: HunterEvent) -> str:
+    if event.event_type == EventType.RVOL:
+        ratio = _number(event, "rvol")
+        return (
+            f"حجم التداول في هذه الدقيقة بلغ {ratio:.2f} ضعف حجمه المعتاد في التوقيت نفسه؛ "
+            "وهذا يعني أن اهتمام المتداولين بالسهم أعلى من الطبيعي."
+            if ratio is not None
+            else "حجم التداول الحالي أعلى من المعتاد، ما يدل على اهتمام غير طبيعي بالسهم."
+        )
+    if event.event_type == EventType.VOLUME_ACCELERATION:
+        return (
+            "حجم التداول ازداد خلال ثلاث دقائق متتالية؛ أي أن النشاط يتسارع الآن بدل أن "
+            "يكون حركة قديمة بدأت تهدأ."
+        )
+    if event.event_type == EventType.BREAKOUT:
+        resistance = _number(event, "resistance")
+        return (
+            f"السعر تجاوز مستوى مقاومة عند ${resistance:.2f}؛ وهذا قد يفتح المجال لاستمرار "
+            "الحركة إذا ثبت السعر فوقه."
+            if resistance is not None
+            else "السعر تجاوز مستوى مقاومة سابقًا، وننتظر ثباته فوقه لتأكيد الاختراق."
+        )
+    if event.event_type == EventType.GAP:
+        gap = _number(event, "gap_pct")
+        return (
+            f"افتتح السهم أعلى من إغلاقه السابق بنسبة {gap:.2f}%، ما يدل على وصول اهتمام "
+            "جديد قبل بداية التداول."
+            if gap is not None
+            else "افتتح السهم أعلى بوضوح من إغلاقه السابق، ما يدل على اهتمام جديد."
+        )
+    move = _number(event, "move_pct")
+    return (
+        f"ارتفع السعر داخل الدقيقة بنسبة {move:.2f}% وأغلق قريبًا من أعلى سعر؛ وهذا يدل على "
+        "أن المشترين ما زالوا مسيطرين لحظيًا."
+        if move is not None
+        else "تحرك السعر بسرعة وأغلق قريبًا من أعلى الدقيقة، ما يعكس زخمًا شرائيًا لحظيًا."
+    )
+
+
+def _score_text(score: float) -> str:
+    if score >= 55:
+        return "قوية نسبيًا لأن عدة أدلة مستقلة تدعم بعضها، لكنها ليست ضمانًا للارتفاع."
+    if score >= 32:
+        return "متوسطة وتستحق اهتمامًا مرتفعًا، لكنها تحتاج تأكيدًا إضافيًا قبل أن تصبح قوية."
+    return "مبكرة؛ ظهر دليل مهم، لكن الأدلة الحالية لا تكفي لاعتبارها فرصة قوية بعد."
+
+
+def _confirmation_text(opportunity: Opportunity) -> str:
+    types = {event.event_type for event in opportunity.events}
+    missing = []
+    if EventType.BREAKOUT not in types:
+        missing.append("اختراق مستوى مقاومة والثبات فوقه")
+    if EventType.RVOL not in types:
+        missing.append("استمرار حجم تداول أعلى من المعتاد")
+    if EventType.VOLUME_ACCELERATION not in types:
+        missing.append("تسارع إضافي في حجم التداول")
+    if EventType.MOMENTUM not in types:
+        missing.append("شمعة جديدة تؤكد استمرار قوة المشترين")
+    if opportunity.state == OpportunityState.WEAKENING:
+        return "ننتظر عودة الحجم والزخم؛ استمرار تراجعهما يعني أن الفرصة تفقد قوتها."
+    if missing:
+        return "لرفع قوة الفرصة ننتظر: " + "، أو ".join(missing[:2]) + "."
+    return "الأدلة الأساسية متوفرة؛ ننتظر استمرار الحركة دون قفزة مبالغ فيها أو فقدان للحجم."
 
 
 def format_opportunity(opportunity: Opportunity) -> str:
-    reasons = "\n".join(f"• {reason}" for reason in opportunity.reasons[:3])
+    ordered = sorted(opportunity.events, key=lambda item: item.strength, reverse=True)
+    evidence = "\n".join(f"• {_evidence_text(event)}" for event in ordered[:4])
+    if not evidence:
+        evidence = "• رصد النظام نشاطًا يستحق المتابعة، لكن تفاصيل الأدلة غير متاحة حاليًا."
+    price = next(
+        (_number(event, "price") for event in ordered if _number(event, "price") is not None),
+        None,
+    )
+    levels = "لا تتوفر مستويات سعرية موثوقة حتى الآن."
+    if price:
+        levels = (
+            f"السعر وقت الإشارة: ${price:.2f}\n"
+            f"منطقة المتابعة المرجعية: ${price * 0.995:.2f}–${price * 1.005:.2f}\n"
+            f"الهدف المرجعي: ${price * 1.05:.2f} (+5%)\n"
+            f"وقف الخسارة المرجعي: ${price * 0.97:.2f} (-3%)"
+        )
     return (
-        f"{opportunity.symbol} — {opportunity.state.value}\n"
-        f"Why now:\n{reasons}\n\n"
-        f"What next: {opportunity.what_next}\n"
-        f"Invalidation: {opportunity.invalidation}"
+        f"🚨 تحديث فرصة: {opportunity.symbol}\n\n"
+        f"الحالة: {STATE_AR[opportunity.state]}\n"
+        f"درجة القوة: {opportunity.score:.2f} من 100\n"
+        f"تفسير الدرجة: {_score_text(opportunity.score)}\n\n"
+        f"لماذا اقترحها النظام؟\n{evidence}\n\n"
+        f"المستويات المرجعية:\n{levels}\n\n"
+        f"ما التأكيد القادم؟\n{_confirmation_text(opportunity)}\n"
+        "سيرسل النظام تحديثًا عند انتقال الفرصة إلى حالة أقوى أو عند بدء ضعفها.\n\n"
+        "متى تُلغى الفكرة؟\n"
+        "إذا فشل الاختراق، أو تراجع حجم التداول والزخم معًا، أو خرج السعر من منطقة "
+        "المتابعة دون تأكيد.\n\n"
+        "⚠️ هذه مراقبة آلية وليست أمر شراء أو ضمان ربح. لا تطارد السعر إذا ابتعد عن المنطقة."
     )
 
 
 def format_test_notification() -> str:
+    now = datetime.now(UTC)
+    sample = Opportunity(
+        symbol="TEST",
+        state=OpportunityState.PRIME_CANDIDATE,
+        score=72.5,
+        updated_at=now,
+        reasons=[],
+        what_next="",
+        invalidation="",
+        events=[
+            HunterEvent(
+                symbol="TEST",
+                event_type=EventType.RVOL,
+                timestamp=now,
+                strength=0.9,
+                reason="",
+                data={"rvol": 3.2, "price": 10.0},
+            ),
+            HunterEvent(
+                symbol="TEST",
+                event_type=EventType.BREAKOUT,
+                timestamp=now,
+                strength=0.8,
+                reason="",
+                data={"resistance": 9.85, "price": 10.0},
+            ),
+            HunterEvent(
+                symbol="TEST",
+                event_type=EventType.VOLUME_ACCELERATION,
+                timestamp=now,
+                strength=0.7,
+                reason="",
+                data={"accelerating": True, "price": 10.0},
+            ),
+        ],
+        previous_state=OpportunityState.HIGH_ATTENTION,
+    )
     return (
-        "🧪 Stock Hunter — Telegram test\n\n"
-        "TEST — prime_candidate\n"
-        "Confidence: 72.50\n"
-        "Why now:\n"
-        "• RVOL reached 3.20\n"
-        "• Price broke resistance with accelerating volume\n\n"
-        "Entry zone: $9.95–$10.05\n"
-        "Target: $10.50 (+5%)\n"
-        "Stop: $9.70 (-3%)\n\n"
-        "What next: Watch for continuation without chasing\n"
-        "Invalidation: Loss of volume or failed breakout\n\n"
-        "This is a test message only. No signal or trade was created."
+        "🧪 رسالة اختبار لنظام Stock Hunter\n"
+        "هذه محاكاة لشكل التنبيه الحقيقي. لم تُنشأ إشارة أو صفقة.\n\n" + format_opportunity(sample)
     )
 
 
