@@ -1,9 +1,10 @@
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from stock_hunter.db import DecisionRecord, OpportunityRecord
-from stock_hunter.judge.models import Opportunity
+from stock_hunter.hunters.models import HunterEvent
+from stock_hunter.judge.models import Opportunity, OpportunityState
 
 
 class OpportunityStore:
@@ -48,3 +49,37 @@ class OpportunityStore:
         )
         async with self.sessions() as session:
             return list((await session.scalars(query)).all())
+
+    async def restore(self) -> list[Opportunity]:
+        async with self.sessions() as session:
+            records = list((await session.scalars(select(OpportunityRecord))).all())
+            if not records:
+                return []
+            decisions = list(
+                (
+                    await session.scalars(
+                        select(DecisionRecord)
+                        .where(DecisionRecord.symbol.in_([item.symbol for item in records]))
+                        .order_by(desc(DecisionRecord.created_at))
+                    )
+                ).all()
+            )
+        latest_evidence: dict[str, list] = {}
+        for decision in decisions:
+            latest_evidence.setdefault(decision.symbol, decision.evidence)
+        return [
+            Opportunity(
+                symbol=record.symbol,
+                state=OpportunityState(record.state),
+                score=record.score,
+                updated_at=record.updated_at,
+                reasons=record.reasons,
+                what_next=record.what_next,
+                invalidation=record.invalidation,
+                events=[
+                    HunterEvent.model_validate(event)
+                    for event in latest_evidence.get(record.symbol, [])
+                ],
+            )
+            for record in records
+        ]
