@@ -20,12 +20,14 @@ from stock_hunter.judge.store import OpportunityStore
 from stock_hunter.live import FinnhubLiveCollector
 from stock_hunter.logging import configure_logging
 from stock_hunter.notifications import TelegramNotifier
+from stock_hunter.opportunity_cards import OpportunityCard, build_card
 from stock_hunter.performance import PerformanceEngine
 from stock_hunter.performance_store import PerformanceStore
 from stock_hunter.providers.factory import create_market_provider
 from stock_hunter.providers.http import ProviderError
 from stock_hunter.providers.models import CompanyProfile, MinuteBarData, Quote
 from stock_hunter.radar import FmpRadar, run_radar
+from stock_hunter.signal_history import SignalHistoryStore, SignalStats, StatsPeriod
 from stock_hunter.universe.models import UniverseRefreshResult
 from stock_hunter.universe.nasdaq import NasdaqUniverseSource
 from stock_hunter.universe.scheduler import run_daily_refresh
@@ -53,6 +55,7 @@ async def lifespan(app: FastAPI):
     app.state.telegram = TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
     app.state.performance = PerformanceEngine()
     app.state.performance_store = PerformanceStore(app.state.sessions)
+    app.state.signal_history = SignalHistoryStore(app.state.sessions)
     await app.state.performance_store.restore(app.state.performance)
     app.state.redis = redis.from_url(settings.redis_url)
     app.state.provider = create_market_provider(settings)
@@ -190,6 +193,7 @@ async def process_bar(application: FastAPI, bar: MinuteBarData) -> IngestResult:
     updated_trade = application.state.performance.update(bar.symbol.upper(), bar.high, bar.low)
     if updated_trade:
         await application.state.performance_store.save(updated_trade)
+        await application.state.signal_history.update(updated_trade, bar.timestamp)
     result = await application.state.intraday.ingest(bar)
     events = [
         event
@@ -204,6 +208,7 @@ async def process_bar(application: FastAPI, bar: MinuteBarData) -> IngestResult:
             if opportunity.state.value == "prime_candidate":
                 trade = application.state.performance.start(opportunity.symbol, bar.close)
                 await application.state.performance_store.save(trade)
+                await application.state.signal_history.start(trade, opportunity, bar.timestamp)
     for event in events:
         await application.state.redis.xadd(
             "stock_events",
@@ -225,6 +230,17 @@ async def top_opportunities(limit: int = 5) -> list[Opportunity]:
     if limit < 1 or limit > 5:
         raise HTTPException(422, detail="limit must be between 1 and 5")
     return app.state.judge.top(limit)
+
+
+@app.get("/api/v1/opportunity-cards", response_model=list[OpportunityCard])
+async def opportunity_cards(limit: int = 5) -> list[OpportunityCard]:
+    if limit < 1 or limit > 5:
+        raise HTTPException(422, detail="limit must be between 1 and 5")
+    opportunities = app.state.judge.top(limit)
+    return [
+        build_card(item, rank, app.state.performance.trades.get(item.symbol))
+        for rank, item in enumerate(opportunities, start=1)
+    ]
 
 
 @app.get("/api/v1/opportunities/{symbol}/timeline")
@@ -251,8 +267,43 @@ async def dashboard_page() -> HTMLResponse:
 
 
 @app.get("/api/v1/performance")
-async def performance_summary() -> dict[str, int | float]:
-    return app.state.performance.summary()
+async def performance_summary() -> dict[str, object]:
+    periods = [StatsPeriod.DAY, StatsPeriod.WEEK, StatsPeriod.MONTH, StatsPeriod.ALL]
+    summaries = await asyncio.gather(
+        *(app.state.signal_history.stats(period) for period in periods)
+    )
+    return {item.period.value: item.model_dump(mode="json") for item in summaries}
+
+
+@app.get("/api/v1/performance/{period}", response_model=SignalStats)
+async def performance_by_period(period: StatsPeriod) -> SignalStats:
+    return await app.state.signal_history.stats(period)
+
+
+@app.get("/api/v1/signals")
+async def signal_history(limit: int = 100) -> list[dict[str, object]]:
+    if limit < 1 or limit > 500:
+        raise HTTPException(422, detail="limit must be between 1 and 500")
+    records = await app.state.signal_history.list(limit)
+    return [
+        {
+            "id": item.id,
+            "symbol": item.symbol,
+            "source": item.source,
+            "state": item.state,
+            "entry": item.entry,
+            "target": item.target,
+            "stop": item.stop,
+            "high": item.high,
+            "low": item.low,
+            "outcome": item.outcome,
+            "catalyst": item.catalyst,
+            "reasons": item.reasons,
+            "opened_at": item.opened_at,
+            "resolved_at": item.resolved_at,
+        }
+        for item in records
+    ]
 
 
 @app.get("/api/v1/trades")
@@ -264,6 +315,7 @@ async def trades() -> list[dict[str, object]]:
 async def manual_entry(request: ManualEntry) -> dict[str, object]:
     trade = app.state.performance.enter_manual(request.symbol, request.entry)
     await app.state.performance_store.save(trade)
+    await app.state.signal_history.start(trade, None, datetime.now(UTC))
     return trade.model_dump(mode="json")
 
 
