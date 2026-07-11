@@ -10,5 +10,6 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: ruff check .
       - run: ruff format --check .
+      - run: python scripts/check_documentation.py
       - run: pytest -q
       - run: docker build -t stock-hunter:test .
