@@ -22,6 +22,7 @@ from stock_hunter.notifications import TelegramNotifier
 from stock_hunter.providers.factory import create_market_provider
 from stock_hunter.providers.http import ProviderError
 from stock_hunter.providers.models import CompanyProfile, MinuteBarData, Quote
+from stock_hunter.radar import FmpRadar, run_radar
 from stock_hunter.universe.models import UniverseRefreshResult
 from stock_hunter.universe.nasdaq import NasdaqUniverseSource
 from stock_hunter.universe.scheduler import run_daily_refresh
@@ -61,17 +62,39 @@ async def lifespan(app: FastAPI):
     )
     app.state.live_stop = asyncio.Event()
     app.state.live_task = None
-    if settings.live_stream_enabled and settings.finnhub_api_key and settings.live_symbol_list:
+    app.state.radar = None
+    app.state.radar_task = None
+    if settings.live_stream_enabled and settings.finnhub_api_key:
         collector = FinnhubLiveCollector(
             settings.finnhub_api_key,
             settings.live_symbol_list,
             lambda bar: process_bar(app, bar),
         )
         app.state.live_task = asyncio.create_task(collector.run(app.state.live_stop))
+        if settings.radar_enabled and settings.fmp_api_key:
+            app.state.radar = FmpRadar(
+                settings.fmp_api_key,
+                settings.universe_min_price,
+                settings.universe_max_price,
+                settings.radar_max_symbols,
+            )
+            app.state.radar_task = asyncio.create_task(
+                run_radar(
+                    app.state.radar,
+                    collector,
+                    settings.live_symbol_list,
+                    settings.radar_refresh_seconds,
+                    app.state.live_stop,
+                )
+            )
     yield
     app.state.live_stop.set()
     if app.state.live_task:
         await app.state.live_task
+    if app.state.radar_task:
+        await app.state.radar_task
+    if app.state.radar:
+        await app.state.radar.close()
     app.state.universe_stop.set()
     await app.state.universe_task
     await app.state.universe_source.close()
