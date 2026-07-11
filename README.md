@@ -3,6 +3,10 @@
 Sprint 1 and Sprint 2 foundation: FastAPI, PostgreSQL, Redis, Docker Compose, logging,
 health endpoints, provider abstraction, FMP, Finnhub, SEC, Mock, tests, and CI.
 
+Sprint 3 adds the official Nasdaq Trader symbol universe, security-type cleanup,
+PostgreSQL persistence, configurable price/market-cap eligibility, optional provider
+enrichment, and universe APIs.
+
 ## Start
 
 1. Copy .env.example to .env.
@@ -24,3 +28,11 @@ Create a Python 3.12 environment, install with pip install -e ".[dev]", then run
 - docker compose config
 
 See docs/ARCHITECTURE.md.
+
+## Universe
+
+- `POST /api/v1/universe/refresh` downloads and stores the official symbol lists.
+- `POST /api/v1/universe/refresh?enrich_limit=100` also enriches up to 100 symbols.
+- `GET /api/v1/universe?limit=100` lists active common stocks.
+- `GET /api/v1/universe?eligible_only=true` requires known price and market cap within
+  the configured range. Missing vendor data is never invented.
