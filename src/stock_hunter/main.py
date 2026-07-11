@@ -2,6 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
+import httpx
 import redis.asyncio as redis
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
@@ -52,6 +53,10 @@ async def lifespan(app: FastAPI):
     app.state.event_manager = EventManager()
     app.state.judge = Judge()
     app.state.opportunity_store = OpportunityStore(app.state.sessions)
+    restored_opportunities = await app.state.opportunity_store.restore()
+    app.state.judge.restore(restored_opportunities)
+    for expired in app.state.judge.expire(datetime.now(UTC)):
+        await app.state.opportunity_store.save(expired)
     app.state.telegram = TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
     app.state.performance = PerformanceEngine()
     app.state.performance_store = PerformanceStore(app.state.sessions)
@@ -229,6 +234,7 @@ async def process_bar(application: FastAPI, bar: MinuteBarData) -> IngestResult:
 async def top_opportunities(limit: int = 5) -> list[Opportunity]:
     if limit < 1 or limit > 5:
         raise HTTPException(422, detail="limit must be between 1 and 5")
+    await expire_opportunities(app)
     return app.state.judge.top(limit)
 
 
@@ -236,11 +242,17 @@ async def top_opportunities(limit: int = 5) -> list[Opportunity]:
 async def opportunity_cards(limit: int = 5) -> list[OpportunityCard]:
     if limit < 1 or limit > 5:
         raise HTTPException(422, detail="limit must be between 1 and 5")
+    await expire_opportunities(app)
     opportunities = app.state.judge.top(limit)
     return [
         build_card(item, rank, app.state.performance.trades.get(item.symbol))
         for rank, item in enumerate(opportunities, start=1)
     ]
+
+
+async def expire_opportunities(application: FastAPI) -> None:
+    for opportunity in application.state.judge.expire(datetime.now(UTC)):
+        await application.state.opportunity_store.save(opportunity)
 
 
 @app.get("/api/v1/opportunities/{symbol}/timeline")
@@ -259,6 +271,25 @@ async def opportunity_timeline(symbol: str, limit: int = 100) -> list[dict[str, 
         }
         for item in records
     ]
+
+
+@app.post("/api/v1/notifications/telegram/test")
+async def test_telegram_notification() -> dict[str, object]:
+    if not app.state.telegram.enabled:
+        raise HTTPException(
+            503,
+            detail=("Telegram is not configured; set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID"),
+        )
+    try:
+        sent = await app.state.telegram.send_test()
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, detail="Telegram test message could not be sent") from exc
+    return {
+        "status": "sent" if sent else "not_sent",
+        "test_only": True,
+        "signal_created": False,
+        "trade_created": False,
+    }
 
 
 @app.get("/", response_class=HTMLResponse)

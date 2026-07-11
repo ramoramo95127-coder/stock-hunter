@@ -36,6 +36,30 @@ class Judge:
         self._opportunities[symbol] = opportunity
         return opportunity
 
+    def restore(self, opportunities: list[Opportunity]) -> int:
+        """Restore durable decisions and their latest evidence after a restart."""
+        for opportunity in opportunities:
+            self._opportunities[opportunity.symbol] = opportunity
+            self._events[opportunity.symbol] = {
+                event.event_type: event for event in opportunity.events
+            }
+        return len(opportunities)
+
+    def expire(self, now: datetime) -> list[Opportunity]:
+        """Re-evaluate known symbols when evidence ages out, even without a new bar."""
+        changed: list[Opportunity] = []
+        for symbol, previous in list(self._opportunities.items()):
+            evidence = self._events.setdefault(symbol, {})
+            active = {
+                kind: event for kind, event in evidence.items() if now - event.timestamp <= self.ttl
+            }
+            self._events[symbol] = active
+            opportunity = self._judge(symbol, list(active.values()), now, previous)
+            if opportunity.state != previous.state or opportunity.score != previous.score:
+                self._opportunities[symbol] = opportunity
+                changed.append(opportunity)
+        return changed
+
     def _judge(
         self, symbol: str, events: list[HunterEvent], now: datetime, previous: Opportunity | None
     ) -> Opportunity:
@@ -47,6 +71,11 @@ class Judge:
             state = OpportunityState.PRIME_CANDIDATE
         elif score >= 32 or len(types) >= 2:
             state = OpportunityState.HIGH_ATTENTION
+        elif previous and previous.state in {
+            OpportunityState.HIGH_ATTENTION,
+            OpportunityState.PRIME_CANDIDATE,
+        }:
+            state = OpportunityState.WEAKENING
         else:
             state = OpportunityState.WATCHING
         reasons = [
@@ -76,6 +105,10 @@ class Judge:
 
     @staticmethod
     def _guidance(types: set[EventType], state: OpportunityState) -> tuple[str, str]:
+        if state == OpportunityState.SLEEPING:
+            return "Wait for fresh qualifying evidence", "No active evidence remains"
+        if state == OpportunityState.WEAKENING:
+            return "Wait for evidence to strengthen again", "Remaining momentum fades"
         if state == OpportunityState.PRIME_CANDIDATE:
             return (
                 "Watch for continuation without chasing an extended candle",
@@ -97,6 +130,11 @@ class Judge:
         active = [
             item
             for item in self._opportunities.values()
-            if item.state not in {OpportunityState.REJECTED, OpportunityState.MISSED}
+            if item.state
+            not in {
+                OpportunityState.REJECTED,
+                OpportunityState.MISSED,
+                OpportunityState.SLEEPING,
+            }
         ]
         return sorted(active, key=lambda item: (item.score, item.updated_at), reverse=True)[:limit]
