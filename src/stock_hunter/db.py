@@ -78,6 +78,7 @@ class TradeRecord(Base):
     low: Mapped[float] = mapped_column(Float)
     outcome: Mapped[str] = mapped_column(String(24), index=True)
     protected_stop: Mapped[float | None] = mapped_column(Float, nullable=True)
+    manual: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
