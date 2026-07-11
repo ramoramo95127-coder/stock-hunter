@@ -1,8 +1,43 @@
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from datetime import UTC, datetime
+
+from sqlalchemy import Boolean, DateTime, Float, String
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Stock(Base):
+    __tablename__ = "stocks"
+
+    symbol: Mapped[str] = mapped_column(String(16), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    exchange: Mapped[str] = mapped_column(String(16), index=True)
+    security_type: Mapped[str] = mapped_column(String(32), default="stock")
+    is_etf: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    price: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    market_cap: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
 
 
 def create_engine(database_url: str) -> AsyncEngine:
     return create_async_engine(database_url, pool_pre_ping=True)
+
+
+def create_session_factory(engine: AsyncEngine) -> async_sessionmaker:
+    return async_sessionmaker(engine, expire_on_commit=False)
+
+
+async def create_schema(engine: AsyncEngine) -> None:
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
 
 
 async def database_ready(engine: AsyncEngine) -> bool:
