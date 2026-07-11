@@ -35,6 +35,15 @@ Create a Python 3.12 environment, install with pip install -e ".[dev]", then run
 
 See docs/ARCHITECTURE.md.
 
+## Documentation
+
+- [الدليل العربي للمبتدئ](docs/ARABIC_GUIDE.md)
+- [سجل التغييرات بالعربية](docs/CHANGELOG_AR.md)
+- [Technical architecture](docs/ARCHITECTURE.md)
+
+Changes to product behavior must update both Arabic documentation files. CI enforces
+this rule so the guide stays aligned with the running application.
+
 ## Universe
 
 - `POST /api/v1/universe/refresh` downloads and stores the official symbol lists.
